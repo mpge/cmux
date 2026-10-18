@@ -56,3 +56,15 @@ extension AgentPaneComposerSetting {
         }
     }
 }
+
+extension AgentPaneComposerSetting {
+    /// `self` (read from cmux.json) with `current`'s Debug Settings toggles, which cmux.json never
+    /// sets: `reasoningSlider` and `reasoningSliderStyle`. Lives here, not in CmuxNextSettings, so
+    /// the settings export's source hash does not move.
+    public func keepingDebugToggles(of current: AgentPaneComposerSetting) -> AgentPaneComposerSetting {
+        var kept = self
+        kept.reasoningSlider = current.reasoningSlider
+        kept.reasoningSliderStyle = current.reasoningSliderStyle
+        return kept
+    }
+}
