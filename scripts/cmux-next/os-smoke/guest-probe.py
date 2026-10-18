@@ -469,8 +469,11 @@ try:
             rows = []
             for l in ps.splitlines():
                 parts = l.strip().split(None, 1)
-                if len(parts) == 2 and "cmux-tui" in os.path.basename(parts[1].split(" --")[0].split(" ")[0]):
-                    rows.append((int(parts[0]), parts[1][-160:]))
+                if len(parts) != 2 or int(parts[0]) == app.pid or APP not in parts[1]:
+                    continue
+                if "Helper" in parts[1] or "__terminal-host" in parts[1] or "WebKit" in parts[1]:
+                    continue
+                rows.append((int(parts[0]), parts[1].replace(APP, "APP")[-150:]))
             return rows
 
         DIAG = []
@@ -507,11 +510,11 @@ try:
                 for key, text in samples.items():
                     if key == "pids" or not text:
                         continue
-                    wanted = ["mux-", "Main Thread", "cmux-tui reader", "dispatch", "tokio"] if key != "app" else ["Main Thread", "cmux-tui reader", "DaemonConnection"]
-                    paths = heavy_paths(text, wanted)
-                    summary[key] = {t[:60]: [n for _, n in p[-7:]] for t, p in paths.items()
-                                    if not any("__workq_kernreturn" in n or "kevent" in n.split("(")[0] for _, n in p[-1:])
-                                    or "control" in t or "Main" in t}
+                    paths = heavy_paths(text, [""] if key != "app" else ["main-thread", "cmux-tui reader"])
+                    idle = ("__workq_kernreturn", "kevent", "__psynch_cvwait", "mach_msg2_trap", "__semwait_signal", "__select", "poll", "__accept")
+                    summary[key] = {t[:70]: [n for _, n in p[-7:]] for t, p in paths.items()
+                                    if key == "app" or "dispatch" in t or not any(p[-1][1].startswith(x) for x in idle)}
+                    summary[key + "_threads"] = len(paths)
                 entry["samples"] = summary
                 DIAG.append(entry)
             return ok
@@ -535,11 +538,15 @@ try:
         write_result()
         print("wksummary %s" % json.dumps({"runs": len(results), "failed": [i for i, r in enumerate(results) if not r]}), flush=True)
         for entry in DIAG:
-            for key, paths in (entry.get("samples") or {}).items():
-                if key == "pids":
-                    print("wkpids    %d %s" % (entry["i"], json.dumps(paths)[:600]), flush=True)
+            print("wkslow    %d ms=%s ok=%s %s" % (entry["i"], entry["ms"], entry["ok"], json.dumps(entry["waits"])[:900]), flush=True)
+            samples = entry.get("samples") or {}
+            print("wkpids    %d %s" % (entry["i"], json.dumps(samples.get("pids"))[:700]), flush=True)
+            for key, paths in samples.items():
+                if key == "pids" or not isinstance(paths, dict):
                     continue
-                print("wksample  %d %s %s" % (entry["i"], key, json.dumps(paths)[:3800]), flush=True)
+                print("wkthreads %d %s total=%s shown=%d" % (entry["i"], key, samples.get(key + "_threads"), len(paths)), flush=True)
+                for thread, frames in list(paths.items())[:14]:
+                    print("wks %d %s | %s | %s" % (entry["i"], key, thread[:60], " < ".join(reversed(frames))[:700]), flush=True)
         sys.stdout.flush()
         os._exit(0 if all(results) else 1)
         settings = rpc("settings.open", {"focus": True})
