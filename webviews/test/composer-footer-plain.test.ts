@@ -214,7 +214,16 @@ await requireBrowserLane("composer-footer-plain.test.ts", async () => {
         const page = await open(width, scheme);
         const row = await page.evaluate(measure);
         await page.close();
-        console.log(JSON.stringify({ width, scheme, look: "off", model: row.modelLabel, access: row.accessLabel, chips: row.chips }));
+        console.log(
+          JSON.stringify({
+            width,
+            scheme,
+            look: "off",
+            model: row.modelLabel,
+            access: row.accessLabel,
+            chips: row.chips,
+          }),
+        );
         expect(row.look).toBe("");
         const model = chip(row, "model")!;
         expect(model.leadingIcon).toBe(true);
@@ -237,7 +246,16 @@ await requireBrowserLane("composer-footer-plain.test.ts", async () => {
         await plain(page, false);
         const back = await page.evaluate(measure);
         await page.close();
-        console.log(JSON.stringify({ width, scheme, look: "on", model: row.modelLabel, access: row.accessLabel, chips: row.chips }));
+        console.log(
+          JSON.stringify({
+            width,
+            scheme,
+            look: "on",
+            model: row.modelLabel,
+            access: row.accessLabel,
+            chips: row.chips,
+          }),
+        );
         const problems: string[] = [];
         if (row.look !== "plain") problems.push(`the bar's look is "${row.look}", not "plain"`);
         for (const each of row.chips) {
