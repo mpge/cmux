@@ -58,11 +58,7 @@ final class AgentPanePageSettings {
             for await value in ObservationStream({ settings.snapshot.agentPaneComposer }) {
                 guard let self else { return }
                 // The reasoning slider is the Debug Settings toggle's, not cmux.json's.
-                let reasoningSlider = composer.reasoningSlider
-                let reasoningSliderStyle = composer.reasoningSliderStyle
-                composer = value
-                composer.reasoningSlider = reasoningSlider
-                composer.reasoningSliderStyle = reasoningSliderStyle
+                composer = value.keepingDebugToggles(of: composer)
                 push()
             }
         }
