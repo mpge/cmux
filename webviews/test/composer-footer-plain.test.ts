@@ -1,7 +1,7 @@
 // The composer footer's plain look (Debug Settings > Pages > "Agent composer: plain footer", the host's
 // `composer` event `plainFooter`, composerSettings.ts): the Claude Code desktop footer, text at rest.
-// The default chips already draw no fill or border at rest; the plain look takes the rest of the
-// difference away:
+// The default model, effort and mode pills draw a resting fill (styles.css --acpmux-pill-fill);
+// the plain look takes that and the rest of the difference away:
 //   - the model's name is muted like effort and the permission mode;
 //   - the model's brand mark and the mode's lock are hidden (the lock comes back when the row steps
 //     the mode's label down to its icon, so the chip never shows a bare chevron). Chevrons stay.
@@ -36,7 +36,16 @@ type Chip = {
   /** The model's name color. */
   nameColor?: string;
 };
-type Row = { fit: string; look: string; content: { left: number; right: number }; chips: Chip[]; boxes: Chip[] };
+type Row = {
+  fit: string;
+  look: string;
+  /** The default pills' resting fill, resolved in the bar (styles.css: the model, effort and mode
+   *  pills' `background`). */
+  restingFill: string;
+  content: { left: number; right: number };
+  chips: Chip[];
+  boxes: Chip[];
+};
 
 await requireBrowserLane("composer-footer-plain.test.ts", async () => {
   /** Runs in the page: the footer's chips and every control's box. */
@@ -76,6 +85,12 @@ await requireBrowserLane("composer-footer-plain.test.ts", async () => {
         },
       ];
     };
+    // The pills' resting fill as styles.css writes it, resolved where the chips resolve it.
+    const probe = document.createElement("span");
+    probe.style.background = "var(--acpmux-pill-fill, color-mix(in srgb, var(--agent-text) 6%, transparent))";
+    bar.append(probe);
+    const restingFill = getComputedStyle(probe).backgroundColor;
+    probe.remove();
     const style = getComputedStyle(bar);
     const barRect = bar.getBoundingClientRect();
     const chips = [
@@ -92,6 +107,7 @@ await requireBrowserLane("composer-footer-plain.test.ts", async () => {
     return {
       fit: bar.dataset.fit ?? "",
       look: bar.dataset.footerLook ?? "",
+      restingFill,
       content: {
         left: barRect.left + parseFloat(style.paddingLeft),
         right: barRect.right - parseFloat(style.paddingRight),
@@ -143,8 +159,15 @@ await requireBrowserLane("composer-footer-plain.test.ts", async () => {
     await vite?.close();
   });
 
+  /** Two frames, then every running transition done (the pills ease their background). */
   const settle = (page: Page) =>
-    page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    page.evaluate(async () => {
+      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+      const finite = document
+        .getAnimations()
+        .filter((animation) => Number.isFinite(Number(animation.effect?.getComputedTiming().endTime)));
+      await Promise.all(finite.map((animation) => animation.finished.catch(() => undefined)));
+    });
 
   /** The composer row; reduced motion, so a hover or the look applies at once. */
   const open = async (width: number, scheme: string) => {
@@ -189,8 +212,10 @@ await requireBrowserLane("composer-footer-plain.test.ts", async () => {
         expect(model.leadingIcon).toBe(true);
         expect(model.nameColor).not.toBe(chip(row, "effort")!.color);
         expect(chip(row, "mode")!.leadingIcon).toBe(true);
+        // Today's pills: the resting fill styles.css gives them.
+        expect(row.restingFill).not.toBe(CLEAR);
         for (const each of row.chips) {
-          expect(each.background).toBe(CLEAR);
+          expect(each.background).toBe(row.restingFill);
           expect(each.chevron).toBe(true);
         }
         expect(overlaps(row)).toEqual([]);
