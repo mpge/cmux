@@ -3,8 +3,9 @@
 // The default model, effort and mode pills draw a resting fill (styles.css --acpmux-pill-fill);
 // the plain look takes that and the rest of the difference away:
 //   - the model's name is muted like effort and the permission mode;
-//   - the model's brand mark and the mode's lock are hidden (the lock comes back when the row steps
-//     the mode's label down to its icon, so the chip never shows a bare chevron). Chevrons stay.
+//   - the model's brand mark and the mode's lock are hidden (each comes back when the row's fit
+//     steps take the model's name or the mode's label away, so no chip is a bare chevron).
+//     Chevrons stay.
 // No chip draws a fill, ring or border at rest; hover, keyboard focus and an open menu draw the
 // row's wash. Labels and keyboard behavior are the same; widths may shrink with the icons hidden,
 // but the row's controls never overlap.
@@ -37,7 +38,10 @@ type Chip = {
   nameColor?: string;
 };
 type Row = {
-  fit: string;
+  /** Whether the model's name (any form) and the mode's label draw: the row's fit steps
+   *  (composerRowFit.ts, data-fit-<unit> and the composer's container queries) take them away. */
+  modelLabel: boolean;
+  accessLabel: boolean;
   look: string;
   /** The default pills' resting fill, resolved in the bar (styles.css: the model, effort and mode
    *  pills' `background`). */
@@ -67,7 +71,10 @@ await requireBrowserLane("composer-footer-plain.test.ts", async () => {
       const icons = [...element.querySelectorAll("svg")];
       const chevron = icons.at(-1);
       const leading = icons.find((icon) => icon !== chevron);
-      const modelName = element.querySelector(".acpmux-model-name");
+      // The model's name as drawn: its full name, or the family form once the row steps it down.
+      const modelName =
+        [...element.querySelectorAll(".acpmux-model-name, .acpmux-model-short")].find(shown) ??
+        element.querySelector(".acpmux-model-name");
       return [
         {
           name,
@@ -105,7 +112,8 @@ await requireBrowserLane("composer-footer-plain.test.ts", async () => {
       ...read("send", ".acpmux-send"),
     ].sort((a, b) => a.left - b.left);
     return {
-      fit: bar.dataset.fit ?? "",
+      modelLabel: [...bar.querySelectorAll('.acpmux-model [data-fit-part="model"]')].some(shown),
+      accessLabel: [...bar.querySelectorAll('.acpmux-access-trigger [data-fit-part="access"]')].some(shown),
       look: bar.dataset.footerLook ?? "",
       restingFill,
       content: {
@@ -206,7 +214,7 @@ await requireBrowserLane("composer-footer-plain.test.ts", async () => {
         const page = await open(width, scheme);
         const row = await page.evaluate(measure);
         await page.close();
-        console.log(JSON.stringify({ width, scheme, look: "off", fit: row.fit, chips: row.chips }));
+        console.log(JSON.stringify({ width, scheme, look: "off", model: row.modelLabel, access: row.accessLabel, chips: row.chips }));
         expect(row.look).toBe("");
         const model = chip(row, "model")!;
         expect(model.leadingIcon).toBe(true);
@@ -229,7 +237,7 @@ await requireBrowserLane("composer-footer-plain.test.ts", async () => {
         await plain(page, false);
         const back = await page.evaluate(measure);
         await page.close();
-        console.log(JSON.stringify({ width, scheme, look: "on", fit: row.fit, chips: row.chips }));
+        console.log(JSON.stringify({ width, scheme, look: "on", model: row.modelLabel, access: row.accessLabel, chips: row.chips }));
         const problems: string[] = [];
         if (row.look !== "plain") problems.push(`the bar's look is "${row.look}", not "plain"`);
         for (const each of row.chips) {
@@ -244,10 +252,11 @@ await requireBrowserLane("composer-footer-plain.test.ts", async () => {
         const model = chip(row, "model");
         const muted = chip(row, "effort")?.color;
         if (model?.nameColor !== muted) problems.push(`the model name ${model?.nameColor} is not muted (${muted})`);
-        if (model?.leadingIcon) problems.push("the model's brand mark still draws");
+        if (row.modelLabel && model?.leadingIcon) problems.push("the model's brand mark still draws beside its name");
+        if (!row.modelLabel && !model?.leadingIcon) problems.push("the stepped-down model chip has no mark");
         const mode = chip(row, "mode");
-        if (row.fit !== "icons" && mode?.leadingIcon) problems.push("the mode's lock still draws beside its label");
-        if (row.fit === "icons" && !mode?.leadingIcon) problems.push("the stepped-down mode chip has no lock");
+        if (row.accessLabel && mode?.leadingIcon) problems.push("the mode's lock still draws beside its label");
+        if (!row.accessLabel && !mode?.leadingIcon) problems.push("the stepped-down mode chip has no lock");
         problems.push(...overlaps(row));
         if (back.look !== "" || JSON.stringify(back.chips) !== JSON.stringify(before.chips))
           problems.push("turning the look off does not draw the chips as before");
