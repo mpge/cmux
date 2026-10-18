@@ -422,12 +422,126 @@ try:
                   "exit": None if alive() else app.returncode, "routed": [(b or {}).get("action") for b in burst],
                   "crash": crash})
         # Settings is a page tab of the main window; focus true selects it (no app activation).
-        webkit_page = page + "webkit"
-        opened = rpc("action.run", {"action": "openBrowser", "args": {"url": webkit_page, "engine": "webkit"}, "focus": True})
-        state = wait(lambda: (lambda s: s if isinstance(s, dict) and s.get("url") == webkit_page and s.get("title") == TITLE else None)(
-            rpc("browser.page.state")), TAB_DEADLINE, alive)
-        snap("webkit", "webkit.png")
-        step("webkit", bool(state) and "error" not in (opened or {}), {"run": opened, "state": state or rpc("browser.page.state")})
+        # DIAG (proof only, not for landing): the WebKit step in a loop, each after a Cmd-T burst,
+        # with a sample of the daemon and the app while a reply is late.
+        def heavy_paths(text, wanted):
+            out, thread, path, depth = {}, None, [], -1
+            for line in text.splitlines():
+                h = re.match(r"^\s+\d+ (Thread_\d+.*)$", line)
+                if h:
+                    if thread and path:
+                        out[thread] = path
+                    thread, path, depth = h.group(1), [], -1
+                    if not any(w in thread for w in wanted):
+                        thread = None
+                    continue
+                if thread is None:
+                    continue
+                m = re.match(r"^(\s*[+!:| ]*)(\d+)\s+(.*)$", line)
+                if not m:
+                    if path:
+                        out[thread] = path
+                    thread = None
+                    continue
+                d = len(m.group(1))
+                if d > depth:
+                    depth = d
+                    name = re.sub(r"\s+\[0x[0-9a-f]+\]$", "", m.group(3))
+                    name = re.sub(r"\s+\+ \d+$", "", name)
+                    path.append((m.group(2), name[:110]))
+                elif path:
+                    out[thread] = path
+                    thread = None
+            if thread and path:
+                out[thread] = path
+            return out
+
+        def sample_pid(pid, tag, label):
+            f = os.path.join(OUT, "sample-%s-%s.txt" % (tag, pid))
+            subprocess.run(["/usr/bin/sample", str(pid), "1", "-mayDie", "-file", f], capture_output=True, timeout=90)
+            try:
+                return open(f, errors="replace").read()
+            except OSError:
+                return ""
+
+        def daemon_pids():
+            ps = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+            rows = []
+            for l in ps.splitlines():
+                parts = l.strip().split(None, 1)
+                if len(parts) == 2 and "cmux-tui" in os.path.basename(parts[1].split(" --")[0].split(" ")[0]):
+                    rows.append((int(parts[0]), parts[1][-160:]))
+            return rows
+
+        DIAG = []
+        def webkit_attempt(i):
+            url = page + "webkit%d" % i
+            done = threading.Event()
+            box = {}
+            def call():
+                t0 = time.time()
+                box["reply"] = rpc("action.run", {"action": "openBrowser", "args": {"url": url, "engine": "webkit"}, "focus": True})
+                box["ms"] = round((time.time() - t0) * 1000)
+                done.set()
+            threading.Thread(target=call, daemon=True).start()
+            samples = {}
+            if not done.wait(1.2):
+                pids = daemon_pids()
+                threads = [threading.Thread(target=lambda p=p: samples.__setitem__("d%d" % p, sample_pid(p, "d%d" % i, "daemon")))
+                           for p, _ in pids[:4]]
+                threads.append(threading.Thread(target=lambda: samples.__setitem__("app", sample_pid(app.pid, "a%d" % i, "app"))))
+                for t in threads: t.start()
+                for t in threads: t.join(95)
+                samples["pids"] = pids
+            done.wait(10)
+            state = wait(lambda: (lambda s: s if isinstance(s, dict) and s.get("url") == url and s.get("title") == TITLE else None)(
+                rpc("browser.page.state")), 15, alive)
+            reply = box.get("reply") or {}
+            ok = bool(state) and "error" not in reply
+            err = reply.get("error") if isinstance(reply, dict) else None
+            waits = ((err or {}).get("data") or {}).get("waiting_on") if isinstance(err, dict) else None
+            entry = {"i": i, "ok": ok, "ms": box.get("ms"), "waits": waits}
+            print("wkloop    %s" % json.dumps(entry)[:700], flush=True)
+            if samples:
+                summary = {"pids": samples.get("pids")}
+                for key, text in samples.items():
+                    if key == "pids" or not text:
+                        continue
+                    wanted = ["mux-", "Main Thread", "cmux-tui reader", "dispatch", "tokio"] if key != "app" else ["Main Thread", "cmux-tui reader", "DaemonConnection"]
+                    paths = heavy_paths(text, wanted)
+                    summary[key] = {t[:60]: [n for _, n in p[-7:]] for t, p in paths.items()
+                                    if not any("__workq_kernreturn" in n or "kevent" in n.split("(")[0] for _, n in p[-1:])
+                                    or "control" in t or "Main" in t}
+                entry["samples"] = summary
+                DIAG.append(entry)
+            return ok
+
+        results = [webkit_attempt(0)]
+        result["steps"]["webkit"] = {"ok": results[0]}
+        for i in range(1, 14):
+            if not alive():
+                break
+            burst = [rpc("debug.key", {"key": "t", "modifiers": ["cmd"]}) for _ in range(6)]
+            wait(lambda: not alive(), 3, step_s=0.5)
+            results.append(webkit_attempt(i))
+        step("wkloop", all(results), {"runs": len(results), "failed": [i for i, r in enumerate(results) if not r]})
+        if alive():
+            rpc("action.run", {"action": "quitEndEverything"}, timeout=10)
+            try:
+                app.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                app.send_signal(signal.SIGKILL)
+                app.wait()
+        write_result()
+        print("wksummary %s" % json.dumps({"runs": len(results), "failed": [i for i, r in enumerate(results) if not r]}), flush=True)
+        for entry in DIAG:
+            for key, paths in (entry.get("samples") or {}).items():
+                if key == "pids":
+                    print("wkpids    %d %s" % (entry["i"], json.dumps(paths)[:600]), flush=True)
+                    continue
+                print("wksample  %d %s %s" % (entry["i"], key, json.dumps(paths)[:3800]), flush=True)
+        sys.stdout.flush()
+        os._exit(0 if all(results) else 1)
         settings = rpc("settings.open", {"focus": True})
         # Wait on the page's first frame (debug.page `painted`), then snapshot.
         if debug_router():
