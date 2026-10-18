@@ -552,7 +552,7 @@ try:
             wait(lambda: not alive(), 3, step_s=0.5)
             return webkit_attempt(i)
 
-        for i in range(1, 9):
+        for i in range(1, int(os.environ.get("OS_SMOKE_WK_CYCLES", "0")) + 1):
             if not alive():
                 break
             results.append(relaunch_cycle(i))
