@@ -510,10 +510,10 @@ try:
                 for key, text in samples.items():
                     if key == "pids" or not text:
                         continue
-                    paths = heavy_paths(text, [""] if key != "app" else ["main-thread", "cmux-tui reader"])
+                    paths = heavy_paths(text, [""])
                     idle = ("__workq_kernreturn", "kevent", "__psynch_cvwait", "mach_msg2_trap", "__semwait_signal", "__select", "poll", "__accept")
                     summary[key] = {t[:70]: [n for _, n in p[-7:]] for t, p in paths.items()
-                                    if key == "app" or "dispatch" in t or not any(p[-1][1].startswith(x) for x in idle)}
+                                    if "main-thread" in t or "reader" in t or "dispatch" in t or not any(p[-1][1].startswith(x) for x in idle)}
                     summary[key + "_threads"] = len(paths)
                 entry["samples"] = summary
                 DIAG.append(entry)
@@ -521,12 +521,41 @@ try:
 
         results = [webkit_attempt(0)]
         result["steps"]["webkit"] = {"ok": results[0]}
-        for i in range(1, 14):
+        def relaunch_cycle(i):
+            global app
+            rpc("action.run", {"action": "quitEndEverything"}, timeout=10)
+            try:
+                app.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                app.send_signal(signal.SIGKILL)
+                app.wait()
+            if os.path.exists(USE_RECORD):
+                os.unlink(USE_RECORD)
+            if os.path.exists(SOCKET):
+                os.unlink(SOCKET)
+            app = subprocess.Popen([BINARY], env=env, stdout=log, stderr=log, stdin=subprocess.DEVNULL)
+            t0 = time.time()
+            if not wait(windows_now, LAUNCH_DEADLINE, alive):
+                print("wkcycle   %d no window" % i, flush=True)
+                return False
+            before = terminal_count()
+            rpc("action.run", {"action": "newTab", "focus": True, "wait": True})
+            wait(lambda: terminal_count() > before, TAB_DEADLINE, alive)
+            wait(lambda: False, max(0.0, 4.5 - (time.time() - t0)), alive)
+            chrome = page + "c%d" % i
+            rpc("action.run", {"action": "openBrowser", "args": {"url": chrome}, "focus": True})
+            wait(lambda: (lambda st: st if isinstance(st, dict) and st.get("title") == TITLE else None)(rpc("browser.page.state")),
+                 TAB_DEADLINE, alive)
+            rpc("browser.page.screenshot", {}, timeout=60)
+            wait(lambda: False, 5, alive)
+            [rpc("debug.key", {"key": "t", "modifiers": ["cmd"]}) for _ in range(6)]
+            wait(lambda: not alive(), 3, step_s=0.5)
+            return webkit_attempt(i)
+
+        for i in range(1, 9):
             if not alive():
                 break
-            burst = [rpc("debug.key", {"key": "t", "modifiers": ["cmd"]}) for _ in range(6)]
-            wait(lambda: not alive(), 3, step_s=0.5)
-            results.append(webkit_attempt(i))
+            results.append(relaunch_cycle(i))
         step("wkloop", all(results), {"runs": len(results), "failed": [i for i, r in enumerate(results) if not r]})
         if alive():
             rpc("action.run", {"action": "quitEndEverything"}, timeout=10)
